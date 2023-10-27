@@ -1,0 +1,8 @@
+.idea/
+ca.crt
+ca.key
+end.crt
+end.key
+*.pkg
+data.json
+build/
