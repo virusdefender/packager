@@ -69,7 +69,7 @@ func main() {
 					}
 				} else {
 					fmt.Println("ca cert and key not exist, generating...")
-					rootPrivateKey, rootCertificate, err = packager.GenerateRoot()
+					rootPrivateKey, rootCertificate, err = packager.GenerateRoot("Packager Root CA")
 					if err != nil {
 						return err
 					}
@@ -277,7 +277,7 @@ func main() {
 				}
 				defer output.Close()
 
-				extraData, endCert, err := packager.Unpack(unpackConfig, input, output)
+				extraData, endCert, err := packager.Unpack(input, output, &unpackHandler{config: unpackConfig})
 				if extraData != nil {
 					data, _ := json.MarshalIndent(extraData, "", "  ")
 					fmt.Printf("extra data:\n%s\n\n", string(data))
@@ -345,10 +345,11 @@ func main() {
 				}
 				copy(extraDataAesKey[:], cliExtraDataAesKey)
 
-				extraData, cert, err := packager.GetExtraData(&packager.UnpackConfig{
-					CACertificate:   caCert,
-					ExtraDataAesKey: extraDataAesKey,
-				}, input, c.Bool("verify"))
+				extraData, cert, err := packager.GetMetaData(input,
+					&unpackHandler{config: &packager.UnpackConfig{
+						CACertificate:   caCert,
+						ExtraDataAesKey: extraDataAesKey,
+					}}, c.Bool("verify"))
 				if err != nil {
 					return err
 				}
@@ -375,4 +376,16 @@ func main() {
 		fmt.Printf("run app failed, err: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+type unpackHandler struct {
+	config *packager.UnpackConfig
+}
+
+func (u *unpackHandler) GetConfig(magic [32]byte) (*packager.UnpackConfig, error) {
+	return u.config, nil
+}
+
+func (u *unpackHandler) HandleUnverifiedExtraDataAndCert(extraData map[string]string, cert *x509.Certificate) bool {
+	return true
 }

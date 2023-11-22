@@ -20,6 +20,7 @@
 ```shell
 ./packager gen-cert --common-name front-end-team
 ```
+
 **后续的命令行示例均使用相同的简单 key，实际使用中请自行维护一对随机生成的不同的 key。**
 
 ## 打包
@@ -41,8 +42,8 @@
 传入 ca 证书和对应的 key，使用 cli 或者 api 解包，如果解包成功，则返回内嵌的 ExtraData 和签名证书信息。
 
 ```shell
-./packager unpack --input data.zip.pkg --output unpack-data.zip
-    --main-data-aes-key aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+./packager unpack --input data.zip.pkg --output unpack-data.zip \
+    --main-data-aes-key aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
     --extra-data-aes-key aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 ```
 

@@ -14,20 +14,29 @@ import (
 	"time"
 )
 
-func GetExtraData(config *UnpackConfig, input io.Reader, verify bool) (map[string]string, *x509.Certificate, error) {
-	return unpack(config, input, io.Discard, verify, true)
+type UnpackConfigHandler interface {
+	// 根据 Magic 选择对应的配置
+	GetConfig(magic [MagicSize]byte) (*UnpackConfig, error)
 }
 
-func Unpack(config *UnpackConfig, input io.Reader, output io.Writer) (map[string]string, *x509.Certificate, error) {
-	return unpack(config, input, output, true, false)
+type UnpackHandler interface {
+	UnpackConfigHandler
+	// ExtraData 是在文件中直接获取的，此未经签名验证，需要使用函数的返回值中提供的数据进行二次校验
+	// 如果返回 false 则不再进行后续处理，比如证书不在允许范围内等原因
+	HandleUnverifiedExtraDataAndCert(extraData map[string]string, cert *x509.Certificate) bool
 }
 
-func unpack(config *UnpackConfig, input io.Reader, output io.Writer, verifyExtraData bool, metaDataOnly bool) (map[string]string, *x509.Certificate, error) {
+func Unpack(input io.Reader, output io.Writer, handler UnpackHandler) (map[string]string, *x509.Certificate, error) {
 	// 读取文件头部信息
 	header := fileHeader{}
 	err := binary.Read(input, binary.LittleEndian, &header)
 	if err != nil {
 		return nil, nil, errors.Wrap(err, "read header")
+	}
+
+	config, err := handler.GetConfig(header.Magic)
+	if err != nil {
+		return nil, nil, errors.Wrap(err, "get config")
 	}
 
 	// 读取 ExtraData
@@ -54,26 +63,22 @@ func unpack(config *UnpackConfig, input io.Reader, output io.Writer, verifyExtra
 	}
 
 	// 反序列化 ExtraData
-	metaData := make(map[string]string)
-	err = json.Unmarshal(extraDataBytes, &metaData)
+	extraData := make(map[string]string)
+	err = json.Unmarshal(extraDataBytes, &extraData)
 	if err != nil {
 		return nil, nil, errors.Wrap(err, "unmarshal extra data failed, maybe wrong aes key")
-	}
-
-	if !verifyExtraData {
-		return metaData, nil, nil
 	}
 
 	// 获取证书
 	certBytes := make([]byte, header.CertificateLength)
 	_, err = io.ReadFull(input, certBytes)
 	if err != nil {
-		return metaData, nil, errors.Wrap(err, "read certificate")
+		return extraData, nil, errors.Wrap(err, "read certificate")
 	}
 
 	cert, err := x509.ParseCertificate(certBytes)
 	if err != nil {
-		return metaData, nil, errors.Wrap(err, "parse certificate")
+		return extraData, nil, errors.Wrap(err, "parse certificate")
 	}
 
 	// 验证证书是否是指定的 ca 颁发
@@ -85,14 +90,20 @@ func unpack(config *UnpackConfig, input io.Reader, output io.Writer, verifyExtra
 	}
 	_, err = cert.Verify(opts)
 	if err != nil {
-		return metaData, cert, errors.Wrap(err, "verify certificate")
+		return extraData, cert, errors.Wrap(err, "verify certificate")
 	}
 
+	// 如果返回了 false 就代表不再继续处理了，比如证书不在允许范围内等原因
+	if !handler.HandleUnverifiedExtraDataAndCert(extraData, cert) {
+		return nil, nil, nil
+	}
+
+	decryptMainBody := output != io.Discard
 	var ctr cipher.Stream
-	if !metaDataOnly {
+	if decryptMainBody {
 		block, err := aes.NewCipher(config.MainDataAesKey[:])
 		if err != nil {
-			return metaData, cert, errors.Wrap(err, "new cipher")
+			return extraData, cert, errors.Wrap(err, "new cipher")
 		}
 		ctr = cipher.NewCTR(block, header.IV[:])
 	}
@@ -112,18 +123,18 @@ func unpack(config *UnpackConfig, input io.Reader, output io.Writer, verifyExtra
 		}
 		_, err = io.ReadFull(input, buf[:curChunkSize])
 		if err != nil {
-			return metaData, cert, errors.Wrap(err, "read input")
+			return extraData, cert, errors.Wrap(err, "read input")
 		}
 		sizeLeft -= curChunkSize
 		_, err = hasher.Write(buf[:curChunkSize])
 		if err != nil {
-			return metaData, cert, errors.Wrap(err, "write hasher")
+			return extraData, cert, errors.Wrap(err, "write hasher")
 		}
-		if !metaDataOnly {
+		if decryptMainBody {
 			ctr.XORKeyStream(buf[:curChunkSize], buf[:curChunkSize])
 			_, err = output.Write(buf[:curChunkSize])
 			if err != nil {
-				return metaData, cert, errors.Wrap(err, "write output")
+				return extraData, cert, errors.Wrap(err, "write output")
 			}
 		}
 	}
@@ -132,15 +143,15 @@ func unpack(config *UnpackConfig, input io.Reader, output io.Writer, verifyExtra
 	signature := make([]byte, header.SignatureLength)
 	_, err = io.ReadFull(input, signature)
 	if err != nil {
-		return metaData, cert, errors.Wrap(err, "read signature")
+		return extraData, cert, errors.Wrap(err, "read signature")
 	}
 
 	// 验证签名
 	h := hasher.Sum(nil)
 	err = rsa.VerifyPSS(cert.PublicKey.(*rsa.PublicKey), crypto.SHA256, h, signature, nil)
 	if err != nil {
-		return metaData, cert, errors.Wrap(err, "verify signature")
+		return extraData, cert, errors.Wrap(err, "verify signature")
 	}
 
-	return metaData, cert, nil
+	return extraData, cert, nil
 }

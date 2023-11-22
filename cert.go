@@ -11,11 +11,11 @@ import (
 	"time"
 )
 
-func GenerateRoot() (*rsa.PrivateKey, *x509.Certificate, error) {
+func GenerateRoot(commonName string) (*rsa.PrivateKey, *x509.Certificate, error) {
 	rootTemplate := &x509.Certificate{
 		SerialNumber: big.NewInt(time.Now().UnixNano() - 10),
 		Subject: pkix.Name{
-			CommonName: "Packager Root CA",
+			CommonName: commonName,
 		},
 		NotBefore:             time.Now(),
 		NotAfter:              time.Now().AddDate(30, 0, 0),
